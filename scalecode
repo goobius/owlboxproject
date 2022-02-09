@@ -1,0 +1,151 @@
+/*
+ Example using the SparkFun HX711 breakout board with a scale
+ By: Nathan Seidle
+ SparkFun Electronics
+ Date: November 19th, 2014
+ License: This code is public domain but you buy me a beer if you use this and we meet someday (Beerware license).
+
+ This example demonstrates basic scale output. See the calibration sketch to get the calibration_factor for your
+ specific load cell setup.
+
+ This example code uses bogde's excellent library: https://github.com/bogde/HX711
+ bogde's library is released under a GNU GENERAL PUBLIC LICENSE
+
+ The HX711 does one thing well: read load cells. The breakout board is compatible with any wheat-stone bridge
+ based load cell which should allow a user to measure everything from a few grams to tens of tons.
+ Arduino pin 2 -> HX711 CLK
+ 3 -> DAT
+ 5V -> VCC
+ GND -> GND
+
+ The HX711 board can be powered from 2.7V to 5V so the Arduino 5V power should be fine.
+
+*/
+
+#include "HX711.h"
+#include <SPI.h>
+#include <SD.h>
+#include <SPI.h>
+#include <Ethernet.h>
+
+#define calibration_factor 1711.9 //This value is obtained using the SparkFun_HX711_Calibration sketch
+
+#define DOUT  7
+#define CLK  6
+
+File root;
+
+const int chipSelect = 4;
+
+HX711 scale;
+
+// MAC address from Ethernet shield sticker under board
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress ip(192, 168, 50, 231); // IP address, may need to change depending on network
+EthernetServer server(80);  // create a server at port 80
+
+void setup() {
+  Serial.begin(9600);
+  {
+    Ethernet.begin(mac, ip);  // initialize Ethernet device
+    server.begin();           // start to listen for clients
+}
+  Serial.println("HX711 scale demo");
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
+  }
+
+  scale.begin(DOUT, CLK);
+  scale.set_scale(calibration_factor); //This value is obtained by using the SparkFun_HX711_Calibration sketch
+  scale.tare(); //Assuming there is no weight on the scale at start up, reset the scale to 0
+
+  //Serial.println("Readings:");
+
+  Serial.print("Initializing SD card...");
+
+  // see if the card is present and can be initialized:
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    // don't do anything more:
+    while (1);
+  }
+  Serial.println("card initialized.");
+
+  root = SD.open("/");
+ 
+}
+
+
+void loop() {
+  String dataString="";
+  dataString=String(scale.get_units(50), 1);
+  Serial.print("Reading: ");
+  Serial.print(dataString); //scale.get_units() returns a float
+  Serial.print(" grams"); //You can change this to kg but you'll need to refactor the calibration_factor
+  Serial.println();
+  
+  
+
+//Output scale reading to SD Card
+// open the file. note that only one file can be open at a time,
+  // so you have to close this one before opening another.
+  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+
+  // if the file is available, write to it:
+  if (dataFile) {
+    //dataFile.println(dataString); //Reactivate this line after webserver is working.
+    dataFile.close();
+    // print to the serial port too:
+    //Serial.println(dataString);
+  }
+  // if the file isn't open, pop up an error:
+  else {
+    Serial.println("error opening datalog.txt");
+  }
+  EthernetClient client = server.available();  // try to get client
+
+    if (client) {  // got client?
+        boolean currentLineIsBlank = true;
+        while (client.connected()) {
+            if (client.available()) {   // client data available to read
+                char c = client.read(); // read 1 byte (character) from client
+                // last line of client request is blank and ends with \n
+                // respond to client only after last line received
+                if (c == '\n' && currentLineIsBlank) {
+                    // send a standard http response header
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println("Connection: close");
+                    client.println();
+                    // send web page
+                    client.println("<!DOCTYPE html>");
+                    client.println("<html>");
+                    client.println("<head>");
+                    client.print("<meta http-equiv=\"refresh\" content=\"10\">");
+                    client.println("<title>Owl Mass Page</title>");
+                    client.println("</head>");
+                    client.println("<body>");
+                    client.println("<h1>Current Mass</h1>");
+                    client.print(dataString);
+                    client.println(" grams");
+                    client.println("</body>");
+                    client.println("</html>");
+                    break;
+                }
+                // every line of text received from the client ends with \r\n
+                if (c == '\n') {
+                    // last character on line of received text
+                    // starting new line with next character read
+                    currentLineIsBlank = true;
+                } 
+                else if (c != '\r') {
+                    // a text character was received from client
+                    currentLineIsBlank = false;
+                }
+            } // end if (client.available())
+        } // end while (client.connected())
+        delay(1);      // give the web browser time to receive the data
+        client.stop(); // close the connection
+    } // end if (client)
+ delay(60000);
+}
